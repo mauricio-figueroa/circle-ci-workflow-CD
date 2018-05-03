@@ -1,0 +1,112 @@
+defaults: &defaults
+  working_directory: /tmp
+
+dependencies:
+  pre:
+    - sudo pip install awscli
+
+
+workflows:
+  version: 2
+  deploy:
+    jobs:
+      - set-up-environment:
+          context: org-global
+          filters:
+            branches:
+              only:
+                - circle-ci
+      - zip-upload-s3:
+            context: org-global
+            requires:
+              - set-up-environment
+      - create-aws-version:
+            context: org-global
+            requires:
+              - zip-upload-s3
+      - deploy-staging:
+            context: org-global
+            requires:
+              - create-aws-version
+      - git-tag:
+            context: org-global
+            requires:
+              - create-aws-version
+      - deploy-prod-approval:
+            context: org-global
+            type: approval
+            requires:
+              - deploy-staging
+              - git-tag
+      - deploy-prod:
+            context: org-global
+            requires:
+              - deploy-prod-approval
+
+  test:
+     jobs:
+      - test_job:
+          filters:
+            branches:
+              ignore:
+                - circle-ci
+
+
+jobs:
+  set-up-environment:
+    steps:
+      - checkout
+      - run: sudo chmod 777 circle-ci-setup-aws-user.sh
+      - run: sudo ./circle-ci-setup-aws-user.sh
+    machine: true
+
+  zip-upload-s3:
+      steps:
+        - checkout
+        - run: mkdir -p workspace
+        - run: ./circle-ci-zip-upload-s3.sh
+        - persist_to_workspace:
+            root: workspace
+            paths:
+             - echo-output
+      machine: true
+
+  create-aws-version:
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - checkout
+      - run: cat /tmp/workspace/echo-output
+      - run: ./circle-ci-create-version.sh -env cash-api-stg
+    machine: true
+
+  deploy-staging:
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - checkout
+      - run: ./circle-cideploy-environment.sh -env cash-api-stg
+    machine: true
+
+  git-tag:
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - checkout
+      - run: ./circle-ci-git-tag.sh
+    machine: true
+
+  deploy-prod:
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+      - checkout
+      - run: ./circle-cideploy-environment.sh -env cash-api-stg
+    machine: true
+
+
+  test_job:
+    steps:
+      - checkout
+      - run: mvn clean test
+    machine: true
